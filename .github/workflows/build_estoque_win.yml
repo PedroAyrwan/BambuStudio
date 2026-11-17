@@ -1,0 +1,20 @@
+name: Build Estoque e Precos (Windows x64)
+
+on:
+  push:
+    branches:
+      - estoque-precos
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_win:
+    name: Build Windows x64
+    uses: ./.github/workflows/build_check_cache.yml
+    with:
+      os: windows-latest
+      build-deps-only: false
+    secrets: inherit
