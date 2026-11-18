@@ -45,6 +45,9 @@ option(SLIC3R_FHS               "Assume BambuStudio is to be installed in a FHS 
 option(SLIC3R_WX_STABLE         "Build against wxWidgets stable (3.0) as oppsed to dev (3.1) on Linux" 0)
 option(SLIC3R_PROFILE 			"Compile BambuStudio with an invasive Shiny profiler" 0)
 option(SLIC3R_PCH               "Use precompiled headers" 1)
+# With SLIC3R_PCH=OFF: still force-include pchheader.hpp (without precompiling it) so sources
+# get the same includes as a PCH build. Lets compiler caches like sccache work with MSVC.
+option(SLIC3R_PCH_FORCE_INCLUDE "Force-include pchheader.hpp when SLIC3R_PCH is off" 0)
 option(SLIC3R_MSVC_COMPILE_PARALLEL "Compile on Visual Studio in parallel" 1)
 option(SLIC3R_MSVC_PDB          "Generate PDB files on MSVC in Release mode" 1)
 option(SLIC3R_PERL_XS           "Compile XS Perl module and enable Perl unit and integration tests" 0)

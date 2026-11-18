@@ -799,4 +799,6 @@ endif()
 
 if (SLIC3R_PCH AND NOT SLIC3R_SYNTAXONLY)
     add_precompiled_header(libslic3r pchheader.hpp FORCEINCLUDE)
+elseif (SLIC3R_PCH_FORCE_INCLUDE AND MSVC)
+    target_compile_options(libslic3r PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:/FI${CMAKE_CURRENT_SOURCE_DIR}/pchheader.hpp>")
 endif ()
