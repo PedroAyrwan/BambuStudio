@@ -82,7 +82,9 @@ jobs:
         run: |
           mkdir build
           cd build
+          rem NOMINMAX: sem PCH, a macro max/min do windows.h quebra codigo do proprio Bambu (ex.: Emboss.cpp).
           cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release -DSLIC3R_PCH=OFF ^
+            -DCMAKE_CXX_FLAGS_INIT=/DNOMINMAX -DCMAKE_C_FLAGS_INIT=/DNOMINMAX ^
             -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache ^
             -DBBL_RELEASE_TO_PUBLIC=1 -DBBL_INTERNAL_TESTING=0 ^
             -DCMAKE_PREFIX_PATH="${{ github.workspace }}\deps\build\BambuStudio_dep\usr\local" ^
