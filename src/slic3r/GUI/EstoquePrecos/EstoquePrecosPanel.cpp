@@ -379,7 +379,7 @@ wxWindow *EstoquePrecosPanel::criar_pagina_precificar(wxNotebook *nb)
     m_lbl_preco->SetFont(fonte_preco);
     m_lbl_preco->SetForegroundColour(wxColour(0, 150, 80));
     box_res->Add(m_lbl_preco, 0, wxALL, FromDIP(6));
-    m_txt_resultado = new wxTextCtrl(p, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(520), FromDIP(560)),
+    m_txt_resultado = new wxTextCtrl(p, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(520), FromDIP(420)),
                                      wxTE_MULTILINE | wxTE_READONLY | wxTE_DONTWRAP);
     m_txt_resultado->SetFont(wxFont(wxFontInfo(9).Family(wxFONTFAMILY_TELETYPE)));
     box_res->Add(m_txt_resultado, 1, wxEXPAND | wxALL, FromDIP(4));
@@ -392,8 +392,9 @@ wxWindow *EstoquePrecosPanel::criar_pagina_precificar(wxNotebook *nb)
     box_prodc->Add(btn_confirmar, 0, wxALIGN_CENTER_VERTICAL);
     btn_confirmar->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { confirmar_producao(); });
 
-    dir->Add(box_res, 1, wxEXPAND | wxALL, FromDIP(6));
+    // Producao fica no topo para o botao estar sempre visivel, mesmo com o resultado longo.
     dir->Add(box_prodc, 0, wxEXPAND | wxALL, FromDIP(6));
+    dir->Add(box_res, 1, wxEXPAND | wxALL, FromDIP(6));
 
     principal->Add(esq, 0, wxEXPAND);
     principal->Add(dir, 1, wxEXPAND);
@@ -729,6 +730,7 @@ void EstoquePrecosPanel::recalcular()
     }
     m_txt_resultado->ChangeValue(o);
     m_pag_preco->Layout();
+    m_pag_preco->FitInside();
 }
 
 void EstoquePrecosPanel::confirmar_producao()
