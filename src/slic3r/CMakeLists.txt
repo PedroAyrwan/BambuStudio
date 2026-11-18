@@ -635,6 +635,12 @@ set(SLIC3R_GUI_SOURCES
     GUI/CaliHistoryDialog.cpp
     GUI/CalibrationPanel.hpp
     GUI/CalibrationPanel.cpp
+    GUI/EstoquePrecos/EstoquePrecosCore.hpp
+    GUI/EstoquePrecos/EstoquePrecosCore.cpp
+    GUI/EstoquePrecos/EstoquePrecosStore.hpp
+    GUI/EstoquePrecos/EstoquePrecosStore.cpp
+    GUI/EstoquePrecos/EstoquePrecosPanel.hpp
+    GUI/EstoquePrecos/EstoquePrecosPanel.cpp
     GUI/CalibrationWizard.hpp
     GUI/CalibrationWizard.cpp
     GUI/CalibrationWizardPage.cpp

@@ -28,6 +28,7 @@
 #include "Auxiliary.hpp"
 #include "Project.hpp"
 #include "CalibrationPanel.hpp"
+#include "EstoquePrecos/EstoquePrecosPanel.hpp"
 #include "UnsavedChangesDialog.hpp"
 #include "Widgets/SideButton.hpp"
 #include "Widgets/SideMenuPopup.hpp"
@@ -426,6 +427,7 @@ public:
 
     CalibrationPanel*     m_calibration{ nullptr };
     DeviceWebPage*        m_web_device{ nullptr };
+    EstoquePrecosPanel*   m_estoque_precos{ nullptr };
     WebViewPanel*         m_webview { nullptr };
     PrinterWebView*       m_printer_view{nullptr};
     wxLogWindow*          m_log_window { nullptr };

@@ -1488,6 +1488,9 @@ void MainFrame::init_tabpanel()
                 agent->track_update_property("select_device_page", std::to_string(++select_device_page_count));
             m_monitor->on_activate();
         }
+        else if (m_estoque_precos != nullptr && panel == m_estoque_precos) {
+            m_estoque_precos->on_activate();
+        }
         else if (panel == m_web_device) {
 #if defined(__WXOSX__)
             // Defer hash navigation until after the notebook paints (macOS + WKWebView).
@@ -1597,6 +1600,10 @@ void MainFrame::init_tabpanel()
         m_web_device = new DeviceWebPage(m_tabpanel);
         m_tabpanel->AddPage(m_web_device, _L("Filament Manager"), std::string("tab_filament_active"), std::string("tab_filament_active"), false);
     }
+
+    // Estoque e Precos: precificacao a partir do fatiamento + estoque de filamentos e insumos.
+    m_estoque_precos = new EstoquePrecosPanel(m_tabpanel);
+    m_tabpanel->AddPage(m_estoque_precos, wxString::FromUTF8("Estoque e Preços"), std::string("tab_filament_active"), std::string("tab_filament_active"), false);
 
     if (m_plater) {
         // load initial config

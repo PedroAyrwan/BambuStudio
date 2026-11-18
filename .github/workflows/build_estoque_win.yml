@@ -11,8 +11,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  testes:
+    name: Testes do calculo e do estoque
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Calculo x planilha
+        run: |
+          g++ -std=c++17 -Wall -Wextra -I src -I tests/estoque_precos -o test_core \
+            tests/estoque_precos/test_core.cpp src/slic3r/GUI/EstoquePrecos/EstoquePrecosCore.cpp
+          ./test_core
+
+      - name: Estoque e JSON
+        run: |
+          g++ -std=c++17 -Wall -Wextra -DESTOQUE_SEM_BOOST -I src -o test_store \
+            tests/estoque_precos/test_store.cpp \
+            src/slic3r/GUI/EstoquePrecos/EstoquePrecosStore.cpp \
+            src/slic3r/GUI/EstoquePrecos/EstoquePrecosCore.cpp
+          ./test_store
+
   build_win:
     name: Build Windows x64
+    needs: [testes]
     uses: ./.github/workflows/build_check_cache.yml
     with:
       os: windows-latest
