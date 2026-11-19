@@ -10,6 +10,7 @@
 
 #include <wx/button.h>
 #include <wx/checkbox.h>
+#include <wx/choicdlg.h>
 #include <wx/choice.h>
 #include <wx/datetime.h>
 #include <wx/grid.h>
@@ -21,6 +22,7 @@
 #include <wx/statbox.h>
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
+#include <wx/textdlg.h>
 
 #include <boost/log/trivial.hpp>
 
@@ -79,11 +81,24 @@ static std::string ep_agora()
     return ep_std8(wxDateTime::Now().Format("%Y-%m-%d %H:%M"));
 }
 
+static wxString ep_titulo() { return ep_u8("Estoque e Preços"); }
+
+static wxStaticText *ep_titulo_secao(wxWindow *p, const wxString &texto)
+{
+    auto *lbl = new wxStaticText(p, wxID_ANY, texto);
+    wxFont f = lbl->GetFont();
+    f.SetPointSize(f.GetPointSize() + 2);
+    f.SetWeight(wxFONTWEIGHT_BOLD);
+    lbl->SetFont(f);
+    return lbl;
+}
+
 // ---------------------------------------------------------------- TabelaEstoque
 
 TabelaEstoque::TabelaEstoque(wxWindow *parent, const wxString &ajuda, std::vector<Coluna> colunas,
                              std::function<int()> contar, std::function<void()> adicionar, std::function<void(int)> remover,
-                             std::function<void()> ao_alterar, bool somente_leitura)
+                             std::function<void()> ao_alterar, bool somente_leitura,
+                             const wxString &rotulo_adicionar, std::vector<Acao> acoes)
     : wxPanel(parent, wxID_ANY)
     , m_colunas(std::move(colunas))
     , m_contar(std::move(contar))
@@ -100,6 +115,53 @@ TabelaEstoque::TabelaEstoque(wxWindow *parent, const wxString &ajuda, std::vecto
         sizer->Add(lbl, 0, wxALL, FromDIP(8));
     }
 
+    if (!somente_leitura) {
+        auto *botoes = new wxBoxSizer(wxHORIZONTAL);
+        auto *btn_add = new wxButton(this, wxID_ANY, rotulo_adicionar.empty() ? ep_u8("Adicionar") : rotulo_adicionar);
+        botoes->Add(btn_add, 0, wxRIGHT, FromDIP(8));
+        btn_add->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
+            if (!m_adicionar) return;
+            m_adicionar();
+            if (m_ao_alterar) m_ao_alterar();
+            recarregar();
+            int ultima = m_grid->GetNumberRows() - 1;
+            if (ultima >= 0) {
+                m_grid->SetGridCursor(ultima, 0);
+                m_grid->MakeCellVisible(ultima, 0);
+                m_grid->EnableCellEditControl();
+            }
+        });
+        for (const Acao &acao : acoes) {
+            auto *btn = new wxButton(this, wxID_ANY, acao.first);
+            botoes->Add(btn, 0, wxRIGHT, FromDIP(8));
+            std::function<void(int)> f = acao.second;
+            btn->Bind(wxEVT_BUTTON, [this, f](wxCommandEvent &) {
+                const int linha = linha_selecionada();
+                if (linha < 0) {
+                    wxMessageBox(ep_u8("Clique primeiro na linha do item."), ep_titulo(), wxOK | wxICON_INFORMATION, this);
+                    return;
+                }
+                f(linha);
+                if (m_ao_alterar) m_ao_alterar();
+                recarregar();
+            });
+        }
+        auto *btn_del = new wxButton(this, wxID_ANY, ep_u8("Remover"));
+        botoes->Add(btn_del, 0);
+        btn_del->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
+            if (!m_remover) return;
+            const int linha = linha_selecionada();
+            if (linha < 0) return;
+            wxString nome = m_grid->GetCellValue(linha, 0);
+            if (wxMessageBox(ep_u8("Remover \"") + nome + ep_u8("\"?"), ep_titulo(), wxYES_NO | wxICON_QUESTION, this) != wxYES)
+                return;
+            m_remover(linha);
+            if (m_ao_alterar) m_ao_alterar();
+            recarregar();
+        });
+        sizer->Add(botoes, 0, wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(8));
+    }
+
     m_grid = new wxGrid(this, wxID_ANY);
     m_grid->CreateGrid(0, int(m_colunas.size()));
     m_grid->SetRowLabelSize(FromDIP(36));
@@ -110,42 +172,17 @@ TabelaEstoque::TabelaEstoque(wxWindow *parent, const wxString &ajuda, std::vecto
     m_grid->SetColLabelSize(FromDIP(40));
     m_grid->EnableEditing(!somente_leitura);
     m_grid->Bind(wxEVT_GRID_CELL_CHANGED, &TabelaEstoque::on_cell_changed, this);
-    sizer->Add(m_grid, 1, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(8));
-
-    if (!somente_leitura) {
-        auto *botoes = new wxBoxSizer(wxHORIZONTAL);
-        auto *btn_add = new wxButton(this, wxID_ANY, ep_u8("Adicionar linha"));
-        auto *btn_del = new wxButton(this, wxID_ANY, ep_u8("Remover linha selecionada"));
-        botoes->Add(btn_add, 0, wxRIGHT, FromDIP(8));
-        botoes->Add(btn_del, 0);
-        sizer->Add(botoes, 0, wxALL, FromDIP(8));
-
-        btn_add->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
-            if (!m_adicionar) return;
-            m_adicionar();
-            if (m_ao_alterar) m_ao_alterar();
-            recarregar();
-            int ultima = m_grid->GetNumberRows() - 1;
-            if (ultima >= 0) {
-                m_grid->SetGridCursor(ultima, 0);
-                m_grid->MakeCellVisible(ultima, 0);
-            }
-        });
-        btn_del->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
-            if (!m_remover) return;
-            wxArrayInt linhas = m_grid->GetSelectedRows();
-            int linha = linhas.IsEmpty() ? m_grid->GetGridCursorRow() : linhas[0];
-            if (linha < 0 || linha >= m_contar()) return;
-            wxString nome = m_grid->GetCellValue(linha, 0);
-            if (wxMessageBox(ep_u8("Remover \"") + nome + ep_u8("\"?"), ep_u8("Estoque e Preços"), wxYES_NO | wxICON_QUESTION, this) != wxYES)
-                return;
-            m_remover(linha);
-            if (m_ao_alterar) m_ao_alterar();
-            recarregar();
-        });
-    }
+    sizer->Add(m_grid, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(8));
 
     SetSizer(sizer);
+}
+
+int TabelaEstoque::linha_selecionada() const
+{
+    wxArrayInt linhas = m_grid->GetSelectedRows();
+    int linha = linhas.IsEmpty() ? m_grid->GetGridCursorRow() : linhas[0];
+    if (linha < 0 || !m_contar || linha >= m_contar()) return -1;
+    return linha;
 }
 
 void TabelaEstoque::recarregar()
@@ -201,11 +238,11 @@ EstoquePrecosPanel::EstoquePrecosPanel(wxWindow *parent) : wxPanel(parent, wxID_
     m_montando = true;
     auto *sizer = new wxBoxSizer(wxVERTICAL);
     m_notebook = new wxNotebook(this, wxID_ANY);
-    m_notebook->AddPage(criar_pagina_precificar(m_notebook), ep_u8("Precificar placa"), true);
+    m_notebook->AddPage(criar_pagina_precificar(m_notebook), ep_u8("Precificar"), true);
     m_tab_rolos = criar_tabela_rolos(m_notebook);
-    m_notebook->AddPage(m_tab_rolos, ep_u8("Filamentos (estoque)"));
+    m_notebook->AddPage(m_tab_rolos, ep_u8("Estoque de filamentos"));
     m_tab_insumos = criar_tabela_insumos(m_notebook);
-    m_notebook->AddPage(m_tab_insumos, ep_u8("Insumos (estoque)"));
+    m_notebook->AddPage(m_tab_insumos, ep_u8("Estoque de insumos"));
     m_tab_impressoras = criar_tabela_impressoras(m_notebook);
     m_notebook->AddPage(m_tab_impressoras, ep_u8("Impressoras"));
     m_tab_canais = criar_tabela_canais(m_notebook);
@@ -242,7 +279,7 @@ void EstoquePrecosPanel::carregar()
         BOOST_LOG_TRIVIAL(error) << "Estoque e Precos: falha ao ler " << caminho_arquivo() << ": " << erro;
         wxMessageBox(ep_u8("Não foi possível ler o arquivo de estoque:\n") + ep_u8(caminho_arquivo()) + "\n\n" + ep_u8(erro) +
                          ep_u8("\n\nO arquivo não será alterado até você mudar algum dado. Uma cópia de segurança fica em .bak."),
-                     ep_u8("Estoque e Preços"), wxOK | wxICON_WARNING);
+                     ep_titulo(), wxOK | wxICON_WARNING);
         m_dados = Dados::padrao();
     }
 }
@@ -264,10 +301,23 @@ void EstoquePrecosPanel::dados_alterados()
     recalcular();
 }
 
+void EstoquePrecosPanel::estoque_alterado()
+{
+    for (TabelaEstoque *t : {m_tab_rolos, m_tab_insumos, m_tab_historico})
+        if (t) t->recarregar();
+}
+
 void EstoquePrecosPanel::on_activate()
 {
     if (m_montando || m_destruindo) return;
     ler_fatiamento();
+}
+
+void EstoquePrecosPanel::relayout()
+{
+    if (m_pag_preco == nullptr) return;
+    m_pag_preco->Layout();
+    m_pag_preco->FitInside();
 }
 
 // ---------------------------------------------------------------- pagina Precificar
@@ -277,7 +327,7 @@ static wxTextCtrl *ep_campo(wxWindow *parent, wxFlexGridSizer *grid, const wxStr
     grid->Add(new wxStaticText(parent, wxID_ANY, rotulo), 0, wxALIGN_CENTER_VERTICAL);
     auto *txt = new wxTextCtrl(parent, wxID_ANY, valor, wxDefaultPosition, wxSize(parent->FromDIP(110), -1));
     if (!dica.empty()) txt->SetToolTip(dica);
-    grid->Add(txt, 0, wxEXPAND);
+    grid->Add(txt, 0);
     return txt;
 }
 
@@ -285,123 +335,151 @@ wxWindow *EstoquePrecosPanel::criar_pagina_precificar(wxNotebook *nb)
 {
     m_pag_preco = new wxScrolledWindow(nb, wxID_ANY);
     m_pag_preco->SetBackgroundColour(*wxWHITE);
-    m_pag_preco->SetScrollRate(0, FromDIP(12));
+    m_pag_preco->SetScrollRate(FromDIP(12), FromDIP(12));
     wxWindow *p = m_pag_preco;
+    const int borda = FromDIP(10);
 
-    auto *principal = new wxBoxSizer(wxHORIZONTAL);
-    auto *esq = new wxBoxSizer(wxVERTICAL);
-    auto *dir = new wxBoxSizer(wxVERTICAL);
+    auto *col = new wxBoxSizer(wxVERTICAL);
 
-    // --- Fatiamento
-    auto *box_fat = new wxStaticBoxSizer(wxVERTICAL, p, ep_u8("1. Dados do fatiamento (placa atual)"));
-    auto *btn_ler = new wxButton(p, wxID_ANY, ep_u8("Ler placa fatiada"));
-    btn_ler->SetToolTip(ep_u8("Fatie a placa em Preparar e depois clique aqui. Também é lido sempre que você abre esta aba."));
-    box_fat->Add(btn_ler, 0, wxALL, FromDIP(4));
-    m_lbl_status = new wxStaticText(p, wxID_ANY, ep_u8("Fatie a placa e clique em \"Ler placa fatiada\"."));
-    box_fat->Add(m_lbl_status, 0, wxALL, FromDIP(4));
-    m_sizer_filamentos = new wxFlexGridSizer(4, FromDIP(4), FromDIP(8));
-    m_sizer_filamentos->AddGrowableCol(2);
-    box_fat->Add(m_sizer_filamentos, 0, wxEXPAND | wxALL, FromDIP(4));
-    esq->Add(box_fat, 0, wxEXPAND | wxALL, FromDIP(6));
-    btn_ler->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { ler_fatiamento(); });
-
-    // --- Produto
-    auto *box_prod = new wxStaticBoxSizer(wxVERTICAL, p, ep_u8("2. Produto e venda"));
-    auto *g = new wxFlexGridSizer(2, FromDIP(4), FromDIP(8));
-    g->AddGrowableCol(1);
-    g->Add(new wxStaticText(p, wxID_ANY, ep_u8("Nome do produto")), 0, wxALIGN_CENTER_VERTICAL);
-    m_txt_produto = new wxTextCtrl(p, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(260), -1));
-    g->Add(m_txt_produto, 1, wxEXPAND);
-    g->Add(new wxStaticText(p, wxID_ANY, ep_u8("Impressora")), 0, wxALIGN_CENTER_VERTICAL);
-    m_ch_impressora = new wxChoice(p, wxID_ANY);
-    g->Add(m_ch_impressora, 1, wxEXPAND);
-    g->Add(new wxStaticText(p, wxID_ANY, ep_u8("Canal de venda")), 0, wxALIGN_CENTER_VERTICAL);
-    m_ch_canal = new wxChoice(p, wxID_ANY);
-    g->Add(m_ch_canal, 1, wxEXPAND);
-    g->Add(new wxStaticText(p, wxID_ANY, ep_u8("Unidades por placa")), 0, wxALIGN_CENTER_VERTICAL);
-    m_spin_unidades = new wxSpinCtrl(p, wxID_ANY, "1", wxDefaultPosition, wxSize(FromDIP(110), -1), wxSP_ARROW_KEYS, 1, 10000, 1);
-    g->Add(m_spin_unidades, 0);
-    m_txt_horas        = ep_campo(p, g, ep_u8("Tempo de impressão da placa (horas)"), "0", ep_u8("Preenchido pelo fatiamento. Pode ajustar."));
-    m_txt_min_preparo  = ep_campo(p, g, ep_u8("Minutos de preparo + retirada (por placa)"), "15", ep_u8("Modelagem/fatiamento + retirar a peça e limpar a mesa."));
-    m_txt_min_mao      = ep_campo(p, g, ep_u8("Minutos de mão de obra (por unidade)"), "0", ep_u8("Pós-processamento, pintura, montagem, embalagem, atendimento e postagem."));
-    m_txt_embalagem    = ep_campo(p, g, ep_u8("Embalagem avulsa (R$ por unidade)"), "0", ep_u8("Use se a embalagem não estiver na lista de insumos abaixo."));
-    m_txt_outros       = ep_campo(p, g, ep_u8("Outros custos diretos (R$ por unidade)"), "0");
-    m_txt_frete        = ep_campo(p, g, ep_u8("Frete pago por você (R$ por pedido)"), "0");
-    m_txt_arquivo      = ep_campo(p, g, ep_u8("Custo do arquivo/modelo 3D (R$)"), "0");
-    m_txt_arquivo_unid = ep_campo(p, g, ep_u8("Unidades para pagar o arquivo"), "100");
-    m_txt_margem       = ep_campo(p, g, ep_u8("Margem deste produto (%) — vazio = padrão"), "", ep_u8("Deixe vazio para usar a margem de \"Custos do negócio\"."));
-    box_prod->Add(g, 0, wxEXPAND | wxALL, FromDIP(4));
-    esq->Add(box_prod, 0, wxEXPAND | wxALL, FromDIP(6));
-
-    // --- Insumos do produto
-    auto *box_ins = new wxStaticBoxSizer(wxVERTICAL, p, ep_u8("3. Insumos por unidade (tinta, componentes, embalagem)"));
-    m_grid_insumos = new wxGrid(p, wxID_ANY, wxDefaultPosition, wxSize(-1, FromDIP(150)));
-    m_grid_insumos->CreateGrid(0, 3);
-    m_grid_insumos->SetRowLabelSize(0);
-    m_grid_insumos->SetColLabelValue(0, ep_u8("Insumo"));
-    m_grid_insumos->SetColLabelValue(1, ep_u8("Qtd. por unidade"));
-    m_grid_insumos->SetColLabelValue(2, ep_u8("Custo (R$)"));
-    m_grid_insumos->SetColSize(0, FromDIP(300));
-    m_grid_insumos->SetColSize(1, FromDIP(110));
-    m_grid_insumos->SetColSize(2, FromDIP(90));
-    m_grid_insumos->Bind(wxEVT_GRID_CELL_CHANGED, &EstoquePrecosPanel::on_insumo_grid_changed, this);
-    box_ins->Add(m_grid_insumos, 0, wxEXPAND | wxALL, FromDIP(4));
-    auto *bins = new wxBoxSizer(wxHORIZONTAL);
-    auto *btn_ins_add = new wxButton(p, wxID_ANY, ep_u8("Adicionar insumo"));
-    auto *btn_ins_del = new wxButton(p, wxID_ANY, ep_u8("Remover selecionado"));
-    bins->Add(btn_ins_add, 0, wxRIGHT, FromDIP(8));
-    bins->Add(btn_ins_del, 0);
-    box_ins->Add(bins, 0, wxALL, FromDIP(4));
-    esq->Add(box_ins, 0, wxEXPAND | wxALL, FromDIP(6));
-    btn_ins_add->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
-        if (m_dados.insumos.empty()) {
-            wxMessageBox(ep_u8("Cadastre os insumos na aba \"Insumos (estoque)\" primeiro."), ep_u8("Estoque e Preços"), wxOK | wxICON_INFORMATION, this);
-            return;
-        }
-        m_insumos_produto.push_back({m_dados.insumos.front().id, 1.0});
-        recarregar_insumos_produto();
-        recalcular();
-    });
-    btn_ins_del->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
-        int linha = m_grid_insumos->GetGridCursorRow();
-        if (linha < 0 || linha >= int(m_insumos_produto.size())) return;
-        m_insumos_produto.erase(m_insumos_produto.begin() + linha);
-        recarregar_insumos_produto();
-        recalcular();
-    });
-
-    // --- Resultado
-    auto *box_res = new wxStaticBoxSizer(wxVERTICAL, p, ep_u8("Resultado"));
-    m_lbl_preco = new wxStaticText(p, wxID_ANY, ep_u8("Preço sugerido: —"));
-    wxFont fonte_preco = m_lbl_preco->GetFont();
-    fonte_preco.SetPointSize(fonte_preco.GetPointSize() + 6);
-    fonte_preco.SetWeight(wxFONTWEIGHT_BOLD);
-    m_lbl_preco->SetFont(fonte_preco);
+    // ---------- Topo: preco + canal + producao
+    auto *topo = new wxBoxSizer(wxHORIZONTAL);
+    auto *bloco_preco = new wxBoxSizer(wxVERTICAL);
+    m_lbl_preco = new wxStaticText(p, wxID_ANY, ep_u8("R$ —"));
+    wxFont fp = m_lbl_preco->GetFont();
+    fp.SetPointSize(fp.GetPointSize() + 14);
+    fp.SetWeight(wxFONTWEIGHT_BOLD);
+    m_lbl_preco->SetFont(fp);
     m_lbl_preco->SetForegroundColour(wxColour(0, 150, 80));
-    box_res->Add(m_lbl_preco, 0, wxALL, FromDIP(6));
-    m_txt_resultado = new wxTextCtrl(p, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(520), FromDIP(420)),
-                                     wxTE_MULTILINE | wxTE_READONLY | wxTE_DONTWRAP);
-    m_txt_resultado->SetFont(wxFont(wxFontInfo(9).Family(wxFONTFAMILY_TELETYPE)));
-    box_res->Add(m_txt_resultado, 1, wxEXPAND | wxALL, FromDIP(4));
+    bloco_preco->Add(new wxStaticText(p, wxID_ANY, ep_u8("Preço sugerido por peça")), 0);
+    bloco_preco->Add(m_lbl_preco, 0);
+    m_lbl_minimo = new wxStaticText(p, wxID_ANY, wxEmptyString);
+    m_lbl_minimo->SetForegroundColour(wxColour(110, 110, 110));
+    bloco_preco->Add(m_lbl_minimo, 0);
+    topo->Add(bloco_preco, 0, wxRIGHT, FromDIP(30));
 
-    auto *box_prodc = new wxStaticBoxSizer(wxHORIZONTAL, p, ep_u8("4. Produção"));
-    box_prodc->Add(new wxStaticText(p, wxID_ANY, ep_u8("Placas produzidas")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
-    m_spin_placas = new wxSpinCtrl(p, wxID_ANY, "1", wxDefaultPosition, wxSize(FromDIP(80), -1), wxSP_ARROW_KEYS, 1, 1000, 1);
-    box_prodc->Add(m_spin_placas, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(10));
-    auto *btn_confirmar = new wxButton(p, wxID_ANY, ep_u8("Confirmar produção (descontar do estoque)"));
-    box_prodc->Add(btn_confirmar, 0, wxALIGN_CENTER_VERTICAL);
+    auto *bloco_venda = new wxFlexGridSizer(2, FromDIP(6), FromDIP(8));
+    bloco_venda->Add(new wxStaticText(p, wxID_ANY, ep_u8("Vender em")), 0, wxALIGN_CENTER_VERTICAL);
+    m_ch_canal = new wxChoice(p, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(280), -1));
+    bloco_venda->Add(m_ch_canal, 0);
+    bloco_venda->Add(new wxStaticText(p, wxID_ANY, ep_u8("Placas produzidas")), 0, wxALIGN_CENTER_VERTICAL);
+    auto *linha_prod = new wxBoxSizer(wxHORIZONTAL);
+    m_spin_placas = new wxSpinCtrl(p, wxID_ANY, "1", wxDefaultPosition, wxSize(FromDIP(70), -1), wxSP_ARROW_KEYS, 1, 1000, 1);
+    linha_prod->Add(m_spin_placas, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
+    auto *btn_confirmar = new wxButton(p, wxID_ANY, ep_u8("Confirmar produção"));
+    btn_confirmar->SetToolTip(ep_u8("Desconta do estoque o filamento e os insumos usados e registra no histórico."));
+    linha_prod->Add(btn_confirmar, 0, wxALIGN_CENTER_VERTICAL);
+    bloco_venda->Add(linha_prod, 0);
+    topo->Add(bloco_venda, 0, wxALIGN_CENTER_VERTICAL);
+    col->Add(topo, 0, wxALL, borda);
     btn_confirmar->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { confirmar_producao(); });
 
-    // Producao fica no topo para o botao estar sempre visivel, mesmo com o resultado longo.
-    dir->Add(box_prodc, 0, wxEXPAND | wxALL, FromDIP(6));
-    dir->Add(box_res, 1, wxEXPAND | wxALL, FromDIP(6));
+    // ---------- Resumo
+    auto *resumo = new wxFlexGridSizer(2, FromDIP(3), FromDIP(30));
+    auto linha_resumo = [&](const char *rotulo, wxStaticText *&valor, bool destaque) {
+        auto *l = new wxStaticText(p, wxID_ANY, ep_u8(rotulo));
+        valor = new wxStaticText(p, wxID_ANY, "-", wxDefaultPosition, wxDefaultSize, wxALIGN_RIGHT);
+        if (destaque) {
+            l->SetFont(l->GetFont().Bold());
+            valor->SetFont(valor->GetFont().Bold());
+        }
+        resumo->Add(l, 0);
+        resumo->Add(valor, 0, wxALIGN_RIGHT);
+    };
+    linha_resumo("Custo para produzir", m_lbl_r_custo, false);
+    linha_resumo("Taxas do canal e impostos", m_lbl_r_taxas, false);
+    linha_resumo("Reservas (anúncios, devoluções, cupons)", m_lbl_r_reservas, false);
+    linha_resumo("Seu lucro", m_lbl_r_lucro, true);
+    linha_resumo("= Preço de venda", m_lbl_r_preco, true);
+    col->Add(resumo, 0, wxLEFT | wxRIGHT, borda);
+    m_lbl_avisos = new wxStaticText(p, wxID_ANY, wxEmptyString);
+    m_lbl_avisos->SetForegroundColour(wxColour(190, 90, 0));
+    col->Add(m_lbl_avisos, 0, wxLEFT | wxRIGHT | wxTOP, borda);
 
-    principal->Add(esq, 0, wxEXPAND);
-    principal->Add(dir, 1, wxEXPAND);
-    p->SetSizer(principal);
+    m_btn_detalhes = new wxButton(p, wxID_ANY, ep_u8("Ver detalhes do cálculo e outros canais ▼"));
+    col->Add(m_btn_detalhes, 0, wxLEFT | wxTOP, borda);
+    m_txt_detalhes = new wxTextCtrl(p, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(700), FromDIP(430)),
+                                    wxTE_MULTILINE | wxTE_READONLY | wxTE_DONTWRAP);
+    m_txt_detalhes->SetFont(wxFont(wxFontInfo(9).Family(wxFONTFAMILY_TELETYPE)));
+    m_txt_detalhes->Hide();
+    col->Add(m_txt_detalhes, 0, wxLEFT | wxTOP, borda);
+    m_btn_detalhes->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
+        const bool mostrar = !m_txt_detalhes->IsShown();
+        m_txt_detalhes->Show(mostrar);
+        m_btn_detalhes->SetLabel(mostrar ? ep_u8("Esconder detalhes ▲") : ep_u8("Ver detalhes do cálculo e outros canais ▼"));
+        relayout();
+    });
+
+    // ---------- Placa fatiada
+    col->Add(ep_titulo_secao(p, ep_u8("Placa fatiada")), 0, wxLEFT | wxTOP, borda);
+    auto *linha_fat = new wxBoxSizer(wxHORIZONTAL);
+    auto *btn_ler = new wxButton(p, wxID_ANY, ep_u8("Ler de novo"));
+    btn_ler->SetToolTip(ep_u8("Fatie a placa em Preparar. Os dados também são lidos sempre que você abre esta aba."));
+    linha_fat->Add(btn_ler, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
+    m_lbl_status = new wxStaticText(p, wxID_ANY, ep_u8("Fatie a placa em Preparar e volte aqui."));
+    linha_fat->Add(m_lbl_status, 0, wxALIGN_CENTER_VERTICAL);
+    col->Add(linha_fat, 0, wxLEFT | wxTOP, borda);
+    btn_ler->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { ler_fatiamento(); });
+    m_sizer_filamentos = new wxFlexGridSizer(4, FromDIP(4), FromDIP(10));
+    col->Add(m_sizer_filamentos, 0, wxLEFT | wxTOP, borda);
+
+    // ---------- Peca
+    col->Add(ep_titulo_secao(p, ep_u8("Peça")), 0, wxLEFT | wxTOP, borda);
+    auto *g = new wxFlexGridSizer(2, FromDIP(6), FromDIP(10));
+    g->Add(new wxStaticText(p, wxID_ANY, ep_u8("Nome")), 0, wxALIGN_CENTER_VERTICAL);
+    m_txt_produto = new wxTextCtrl(p, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(320), -1));
+    g->Add(m_txt_produto, 0);
+    g->Add(new wxStaticText(p, wxID_ANY, ep_u8("Impressora")), 0, wxALIGN_CENTER_VERTICAL);
+    m_ch_impressora = new wxChoice(p, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(320), -1));
+    g->Add(m_ch_impressora, 0);
+    g->Add(new wxStaticText(p, wxID_ANY, ep_u8("Peças por placa")), 0, wxALIGN_CENTER_VERTICAL);
+    m_spin_unidades = new wxSpinCtrl(p, wxID_ANY, "1", wxDefaultPosition, wxSize(FromDIP(110), -1), wxSP_ARROW_KEYS, 1, 10000, 1);
+    g->Add(m_spin_unidades, 0);
+    m_txt_min_mao = ep_campo(p, g, ep_u8("Seu trabalho por peça (minutos)"), "0",
+                             ep_u8("Acabamento, pintura, montagem, embalagem e postagem de cada peça."));
+    col->Add(g, 0, wxLEFT | wxTOP, borda);
+
+    // ---------- Insumos
+    col->Add(ep_titulo_secao(p, ep_u8("Insumos por peça")), 0, wxLEFT | wxTOP, borda);
+    auto *dica_ins = new wxStaticText(p, wxID_ANY, ep_u8("Tinta, argola, ímã, embalagem... escolha do seu estoque e diga quanto vai em cada peça."));
+    dica_ins->SetForegroundColour(wxColour(110, 110, 110));
+    col->Add(dica_ins, 0, wxLEFT | wxTOP, borda);
+    m_sizer_insumos = new wxFlexGridSizer(4, FromDIP(4), FromDIP(10));
+    col->Add(m_sizer_insumos, 0, wxLEFT | wxTOP, borda);
+    auto *btn_ins = new wxButton(p, wxID_ANY, ep_u8("+ Adicionar insumo"));
+    col->Add(btn_ins, 0, wxLEFT | wxTOP, borda);
+    btn_ins->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { escolher_insumo(); });
+
+    // ---------- Mais opcoes
+    m_btn_mais = new wxButton(p, wxID_ANY, ep_u8("Mais opções ▼"));
+    col->Add(m_btn_mais, 0, wxLEFT | wxTOP, borda);
+    m_pnl_mais = new wxPanel(p, wxID_ANY);
+    m_pnl_mais->SetBackgroundColour(*wxWHITE);
+    auto *gm = new wxFlexGridSizer(2, FromDIP(6), FromDIP(10));
+    wxWindow *pm = m_pnl_mais;
+    m_txt_horas        = ep_campo(pm, gm, ep_u8("Tempo de impressão da placa (horas)"), "0", ep_u8("Vem do fatiamento. Só mude se quiser."));
+    m_txt_min_preparo  = ep_campo(pm, gm, ep_u8("Preparo e retirada da placa (minutos)"), "0", ep_u8("Fatiar, tirar a peça e limpar a mesa (uma vez por placa)."));
+    m_txt_embalagem    = ep_campo(pm, gm, ep_u8("Embalagem avulsa (R$ por peça)"), "0", ep_u8("Use só se a embalagem não estiver nos insumos."));
+    m_txt_outros       = ep_campo(pm, gm, ep_u8("Outros custos (R$ por peça)"), "0");
+    m_txt_frete        = ep_campo(pm, gm, ep_u8("Frete pago por você (R$ por pedido)"), "0");
+    m_txt_arquivo      = ep_campo(pm, gm, ep_u8("Custo do arquivo 3D (R$)"), "0");
+    m_txt_arquivo_unid = ep_campo(pm, gm, ep_u8("Peças para pagar o arquivo"), "100");
+    m_txt_margem       = ep_campo(pm, gm, ep_u8("Margem desta peça (%) — vazio = padrão"), "",
+                                  ep_u8("Deixe vazio para usar a margem de \"Custos do negócio\"."));
+    m_pnl_mais->SetSizer(gm);
+    m_pnl_mais->Hide();
+    col->Add(m_pnl_mais, 0, wxLEFT | wxTOP | wxBOTTOM, borda);
+    m_btn_mais->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
+        const bool mostrar = !m_pnl_mais->IsShown();
+        m_pnl_mais->Show(mostrar);
+        m_btn_mais->SetLabel(mostrar ? ep_u8("Menos opções ▲") : ep_u8("Mais opções ▼"));
+        relayout();
+    });
+    col->AddSpacer(borda);
+
+    p->SetSizer(col);
 
     // Recalcula a cada alteracao.
-    for (wxTextCtrl *t : {m_txt_horas, m_txt_min_preparo, m_txt_min_mao, m_txt_embalagem, m_txt_outros, m_txt_frete,
+    for (wxTextCtrl *t : {m_txt_min_mao, m_txt_horas, m_txt_min_preparo, m_txt_embalagem, m_txt_outros, m_txt_frete,
                           m_txt_arquivo, m_txt_arquivo_unid, m_txt_margem})
         t->Bind(wxEVT_TEXT, [this](wxCommandEvent &) { recalcular(); });
     m_spin_unidades->Bind(wxEVT_SPINCTRL, [this](wxSpinEvent &) { recalcular(); });
@@ -439,7 +517,7 @@ void EstoquePrecosPanel::ler_fatiamento()
     if (plate == nullptr || res == nullptr || !plate->is_slice_result_valid()) {
         m_lbl_status->SetLabel(ep_u8("Placa ") + wxString::Format("%d", idx_placa + 1) +
                                ep_u8(" ainda não foi fatiada. Vá em Preparar → Fatiar placa e volte aqui."));
-        m_pag_preco->Layout();
+        relayout();
         return;
     }
 
@@ -455,7 +533,7 @@ void EstoquePrecosPanel::ler_fatiamento()
     int imp = m_dados.impressora_para_perfil(perfil_impressora);
     if (imp >= 0) m_dados.ultima_impressora = m_dados.impressoras[imp].nome;
 
-    // Nome do produto = nome do projeto, se ainda vazio
+    // Nome da peca = nome do projeto, se ainda vazio
     if (m_txt_produto->GetValue().empty())
         m_txt_produto->ChangeValue(plater->get_project_name());
 
@@ -486,7 +564,7 @@ void EstoquePrecosPanel::ler_fatiamento()
     for (const SlotFilamento &s : m_slots) total_g += s.gramas;
     const int h = int(segundos) / 3600, m = (int(segundos) % 3600) / 60;
     m_lbl_status->SetLabel(ep_u8("Placa ") + wxString::Format("%d", idx_placa + 1) + ep_u8(" · ") + ep_u8(printer.name) + ep_u8(" · ") +
-                           wxString::Format("%dh%02dmin", h, m) + ep_u8(" · ") + ep_fmt(total_g, 1) + ep_u8(" g no total"));
+                           wxString::Format("%dh%02dmin", h, m) + ep_u8(" · ") + ep_fmt(total_g, 1) + ep_u8(" g"));
 
     reconstruir_filamentos();
     atualizar_escolhas();
@@ -498,12 +576,12 @@ void EstoquePrecosPanel::reconstruir_filamentos()
     wxWindow *p = m_pag_preco;
     m_sizer_filamentos->Clear(true);
     if (m_slots.empty()) {
-        m_pag_preco->Layout();
+        relayout();
         return;
     }
-    for (const wxString &t : {ep_u8("Slot / perfil no Bambu"), ep_u8("Gramas"), ep_u8("Rolo do estoque"), ep_u8("R$/g")}) {
+    for (const wxString &t : {ep_u8("Filamento no Bambu"), ep_u8("Gramas"), ep_u8("Sai de qual rolo do estoque"), ep_u8("R$/g")}) {
         auto *lbl = new wxStaticText(p, wxID_ANY, t);
-        lbl->SetFont(lbl->GetFont().Bold());
+        lbl->SetForegroundColour(wxColour(110, 110, 110));
         m_sizer_filamentos->Add(lbl, 0, wxALIGN_CENTER_VERTICAL);
     }
     for (size_t i = 0; i < m_slots.size(); ++i) {
@@ -521,8 +599,8 @@ void EstoquePrecosPanel::reconstruir_filamentos()
 
         s.txt_gramas = new wxTextCtrl(p, wxID_ANY, ep_fmt(s.gramas, 2), wxDefaultPosition, wxSize(FromDIP(70), -1));
         m_sizer_filamentos->Add(s.txt_gramas, 0, wxALIGN_CENTER_VERTICAL);
-        s.ch_rolo = new wxChoice(p, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(280), -1));
-        m_sizer_filamentos->Add(s.ch_rolo, 1, wxEXPAND);
+        s.ch_rolo = new wxChoice(p, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(320), -1));
+        m_sizer_filamentos->Add(s.ch_rolo, 0);
         s.lbl_custo = new wxStaticText(p, wxID_ANY, "-");
         m_sizer_filamentos->Add(s.lbl_custo, 0, wxALIGN_CENTER_VERTICAL);
 
@@ -540,8 +618,76 @@ void EstoquePrecosPanel::reconstruir_filamentos()
             recalcular();
         });
     }
-    m_pag_preco->Layout();
-    m_pag_preco->FitInside();
+    relayout();
+}
+
+void EstoquePrecosPanel::escolher_insumo()
+{
+    if (m_dados.insumos.empty()) {
+        wxMessageBox(ep_u8("Você ainda não tem insumos cadastrados. Cadastre na aba \"Estoque de insumos\"."), ep_titulo(),
+                     wxOK | wxICON_INFORMATION, this);
+        return;
+    }
+    wxArrayString nomes;
+    for (const Insumo &i : m_dados.insumos)
+        nomes.Add(ep_u8(i.nome) + ep_u8("   (") + ep_reais(i.custo_unidade()) + ep_u8(" por ") + ep_u8(i.unidade.empty() ? "un" : i.unidade) + ep_u8(")"));
+    const int escolha = wxGetSingleChoiceIndex(ep_u8("Qual insumo vai nesta peça?"), ep_u8("Adicionar insumo"), nomes, 0, this);
+    if (escolha < 0 || escolha >= int(m_dados.insumos.size())) return;
+    const Insumo &ins = m_dados.insumos[escolha];
+    const wxString resp = wxGetTextFromUser(ep_u8("Quanto de \"") + ep_u8(ins.nome) + ep_u8("\" vai em cada peça? (em ") +
+                                                ep_u8(ins.unidade.empty() ? "un" : ins.unidade) + ep_u8(")"),
+                                            ep_u8("Adicionar insumo"), "1", this);
+    if (resp.empty()) return;
+    bool ok = false;
+    const double qtd = ep_num(resp, 0.0, &ok);
+    if (!ok || qtd <= 0.0) return;
+    LinhaInsumo l;
+    l.insumo_id = ins.id;
+    l.qtd = qtd;
+    m_insumos_produto.push_back(l);
+    reconstruir_insumos();
+    recalcular();
+}
+
+void EstoquePrecosPanel::reconstruir_insumos()
+{
+    if (m_sizer_insumos == nullptr) return;
+    // Remove insumos que nao existem mais no estoque.
+    m_insumos_produto.erase(std::remove_if(m_insumos_produto.begin(), m_insumos_produto.end(),
+                                           [this](const LinhaInsumo &l) { return m_dados.insumo(l.insumo_id) == nullptr; }),
+                            m_insumos_produto.end());
+    wxWindow *p = m_pag_preco;
+    m_sizer_insumos->Clear(true);
+    for (size_t i = 0; i < m_insumos_produto.size(); ++i) {
+        LinhaInsumo &l = m_insumos_produto[i];
+        const Insumo *ins = m_dados.insumo(l.insumo_id);
+        m_sizer_insumos->Add(new wxStaticText(p, wxID_ANY, ep_u8(ins->nome)), 0, wxALIGN_CENTER_VERTICAL);
+        auto *txt = new wxTextCtrl(p, wxID_ANY, ep_fmt(l.qtd, 2), wxDefaultPosition, wxSize(FromDIP(60), -1));
+        auto *und = new wxBoxSizer(wxHORIZONTAL);
+        und->Add(txt, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(4));
+        und->Add(new wxStaticText(p, wxID_ANY, ep_u8(ins->unidade.empty() ? "un" : ins->unidade)), 0, wxALIGN_CENTER_VERTICAL);
+        m_sizer_insumos->Add(und, 0, wxALIGN_CENTER_VERTICAL);
+        l.lbl_custo = new wxStaticText(p, wxID_ANY, ep_reais(ins->custo_unidade() * l.qtd));
+        m_sizer_insumos->Add(l.lbl_custo, 0, wxALIGN_CENTER_VERTICAL);
+        auto *btn_x = new wxButton(p, wxID_ANY, ep_u8("Tirar"), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
+        m_sizer_insumos->Add(btn_x, 0, wxALIGN_CENTER_VERTICAL);
+
+        txt->Bind(wxEVT_TEXT, [this, i, txt](wxCommandEvent &) {
+            if (i >= m_insumos_produto.size()) return;
+            m_insumos_produto[i].qtd = std::max(0.0, ep_num(txt->GetValue()));
+            recalcular();
+        });
+        btn_x->Bind(wxEVT_BUTTON, [this, i](wxCommandEvent &) {
+            if (i >= m_insumos_produto.size()) return;
+            m_insumos_produto.erase(m_insumos_produto.begin() + i);
+            // Recria as linhas depois do evento (o botao clicado sera destruido).
+            CallAfter([this]() {
+                reconstruir_insumos();
+                recalcular();
+            });
+        });
+    }
+    relayout();
 }
 
 void EstoquePrecosPanel::atualizar_escolhas()
@@ -566,70 +712,29 @@ void EstoquePrecosPanel::atualizar_escolhas()
     for (SlotFilamento &s : m_slots) {
         if (s.ch_rolo == nullptr) continue;
         s.ch_rolo->Clear();
-        s.ch_rolo->Append(ep_u8("(sem rolo — custo zero)"));
+        s.ch_rolo->Append(ep_u8("(escolha o rolo)"));
         int sel = 0;
         for (size_t i = 0; i < m_dados.rolos.size(); ++i) {
             const Rolo &r = m_dados.rolos[i];
-            s.ch_rolo->Append(ep_u8(r.nome) + ep_u8("  [") + ep_fmt(r.saldo_g, 0) + ep_u8(" g]"));
+            s.ch_rolo->Append(ep_u8(r.nome) + ep_u8("  — tem ") + ep_fmt(r.saldo_g, 0) + ep_u8(" g"));
             if (r.id == s.rolo_id) sel = int(i) + 1;
         }
         if (sel == 0) s.rolo_id.clear();
         s.ch_rolo->SetSelection(sel);
     }
-    recarregar_insumos_produto();
-}
-
-void EstoquePrecosPanel::recarregar_insumos_produto()
-{
-    if (m_grid_insumos == nullptr) return;
-    wxArrayString nomes;
-    for (const Insumo &i : m_dados.insumos) nomes.Add(ep_u8(i.nome));
-    // Remove insumos que nao existem mais.
-    m_insumos_produto.erase(std::remove_if(m_insumos_produto.begin(), m_insumos_produto.end(),
-                                           [this](const ItemInsumo &it) { return m_dados.insumo(it.insumo_id) == nullptr; }),
-                            m_insumos_produto.end());
-    const int n = int(m_insumos_produto.size());
-    if (m_grid_insumos->GetNumberRows() < n) m_grid_insumos->AppendRows(n - m_grid_insumos->GetNumberRows());
-    if (m_grid_insumos->GetNumberRows() > n) m_grid_insumos->DeleteRows(n, m_grid_insumos->GetNumberRows() - n);
-    for (int r = 0; r < n; ++r) {
-        const ItemInsumo &it = m_insumos_produto[r];
-        const Insumo *ins = m_dados.insumo(it.insumo_id);
-        m_grid_insumos->SetCellEditor(r, 0, new wxGridCellChoiceEditor(nomes));
-        m_grid_insumos->SetCellValue(r, 0, ins ? ep_u8(ins->nome) : wxString());
-        m_grid_insumos->SetCellValue(r, 1, ep_fmt(it.qtd_por_unidade, 3));
-        m_grid_insumos->SetCellValue(r, 2, ep_fmt(ins ? ins->custo_unidade() * it.qtd_por_unidade : 0.0, 2));
-        m_grid_insumos->SetReadOnly(r, 2, true);
-        m_grid_insumos->SetCellBackgroundColour(r, 2, wxColour(242, 242, 242));
-    }
-    m_grid_insumos->ForceRefresh();
-}
-
-void EstoquePrecosPanel::on_insumo_grid_changed(wxGridEvent &evt)
-{
-    const int r = evt.GetRow();
-    if (r < 0 || r >= int(m_insumos_produto.size())) return;
-    if (evt.GetCol() == 0) {
-        const std::string nome = ep_std8(m_grid_insumos->GetCellValue(r, 0));
-        for (const Insumo &i : m_dados.insumos)
-            if (i.nome == nome) { m_insumos_produto[r].insumo_id = i.id; break; }
-    } else if (evt.GetCol() == 1) {
-        m_insumos_produto[r].qtd_por_unidade = std::max(0.0, ep_num(m_grid_insumos->GetCellValue(r, 1)));
-    }
-    CallAfter([this]() {
-        recarregar_insumos_produto();
-        recalcular();
-    });
+    reconstruir_insumos();
 }
 
 void EstoquePrecosPanel::recalcular()
 {
-    if (m_montando || m_destruindo || m_txt_resultado == nullptr) return;
+    if (m_montando || m_destruindo || m_lbl_preco == nullptr) return;
 
     const int ii = m_ch_impressora->GetSelection();
     const int ic = m_ch_canal->GetSelection();
     if (ii < 0 || ii >= int(m_dados.impressoras.size()) || ic < 0 || ic >= int(m_dados.canais.size())) {
-        m_lbl_preco->SetLabel(ep_u8("Cadastre uma impressora e um canal de venda."));
-        m_txt_resultado->ChangeValue(wxEmptyString);
+        m_lbl_preco->SetLabel(ep_u8("R$ —"));
+        m_lbl_avisos->SetLabel(ep_u8("Cadastre uma impressora e um canal de venda."));
+        relayout();
         return;
     }
     const Impressora &imp = m_dados.impressoras[ii];
@@ -642,17 +747,22 @@ void EstoquePrecosPanel::recalcular()
         t.filamentos.push_back({s.gramas, r ? r->custo_por_grama() : 0.0});
         if (s.lbl_custo) s.lbl_custo->SetLabel(r ? ep_u8("R$ ") + ep_fmt(r->custo_por_grama(), 4) : ep_u8("—"));
         if (r == nullptr)
-            avisos.push_back(ep_u8("Filamento ") + wxString::Format("%d", s.id + 1) + ep_u8(" sem rolo escolhido: material entra como R$ 0."));
+            avisos.push_back(ep_u8("Escolha o rolo do filamento ") + wxString::Format("%d", s.id + 1) + ep_u8(" (sem rolo, o material conta como R$ 0)."));
         else if (r->custo_por_grama() <= 0.0)
-            avisos.push_back(ep_u8("Rolo \"") + ep_u8(r->nome) + ep_u8("\" sem preço ou peso: material entra como R$ 0."));
+            avisos.push_back(ep_u8("O rolo \"") + ep_u8(r->nome) + ep_u8("\" está sem preço ou peso."));
     }
+    if (m_slots.empty())
+        avisos.push_back(ep_u8("Fatie a placa em Preparar para trazer o tempo e as gramas."));
     t.horas_impressao       = ep_num(m_txt_horas->GetValue());
     t.unidades_por_placa    = std::max(1, m_spin_unidades->GetValue());
     t.min_preparo_por_placa = ep_num(m_txt_min_preparo->GetValue());
     t.min_mao_obra_por_unid = ep_num(m_txt_min_mao->GetValue());
     double insumos = 0.0;
-    for (const ItemInsumo &it : m_insumos_produto)
-        if (const Insumo *ins = m_dados.insumo(it.insumo_id)) insumos += ins->custo_unidade() * it.qtd_por_unidade;
+    for (LinhaInsumo &l : m_insumos_produto)
+        if (const Insumo *ins = m_dados.insumo(l.insumo_id)) {
+            insumos += ins->custo_unidade() * l.qtd;
+            if (l.lbl_custo) l.lbl_custo->SetLabel(ep_reais(ins->custo_unidade() * l.qtd));
+        }
     t.insumos_por_unid   = insumos;
     t.embalagem_por_unid = ep_num(m_txt_embalagem->GetValue());
     t.outros_por_unid    = ep_num(m_txt_outros->GetValue());
@@ -662,19 +772,31 @@ void EstoquePrecosPanel::recalcular()
     bool margem_ok = false;
     const double margem = ep_num(m_txt_margem->GetValue(), 0.0, &margem_ok);
     t.margem = margem_ok ? margem / 100.0 : -1.0;
-    if (m_slots.empty())
-        avisos.push_back(ep_u8("Nenhum filamento lido: fatie a placa e clique em \"Ler placa fatiada\"."));
 
     const ConfigNegocio &cfg = m_dados.config;
     const Resultado r = calcular(t, imp, canal, cfg);
     m_ultimo_preco = r.preco;
 
     if (!r.valido) {
-        m_lbl_preco->SetLabel(ep_u8("REVISE: os percentuais somam 100% ou mais"));
+        m_lbl_preco->SetLabel(ep_u8("REVISE"));
+        m_lbl_minimo->SetLabel(ep_u8("As porcentagens (taxas + margem) somam 100% ou mais."));
     } else {
-        m_lbl_preco->SetLabel(ep_u8("Preço sugerido: ") + ep_reais(r.preco) + ep_u8("   (mínimo ") + ep_reais(r.preco_minimo) + ep_u8(")"));
+        m_lbl_preco->SetLabel(ep_reais(r.preco));
+        m_lbl_minimo->SetLabel(ep_u8("Abaixo de ") + ep_reais(r.preco_minimo) + ep_u8(" você tem prejuízo."));
     }
+    m_lbl_r_custo->SetLabel(ep_reais(r.custo_producao));
+    m_lbl_r_taxas->SetLabel(ep_reais(r.impostos + r.comissao + r.taxa_pagamento + r.taxa_fixa + r.frete));
+    m_lbl_r_reservas->SetLabel(ep_reais(r.publicidade + r.devolucoes + r.cupons));
+    m_lbl_r_lucro->SetLabel(ep_reais(r.lucro) + ep_u8("  (") + ep_pct(r.margem_real) + ep_u8(")"));
+    m_lbl_r_preco->SetLabel(ep_reais(r.preco));
 
+    wxString aviso_txt;
+    for (const wxString &a : avisos) aviso_txt += ep_u8("⚠ ") + a + "\n";
+    if (!aviso_txt.empty()) aviso_txt.RemoveLast();
+    m_lbl_avisos->SetLabel(aviso_txt);
+    m_lbl_avisos->Show(!aviso_txt.empty());
+
+    // Detalhes (texto monoespacado)
     wxString o;
     auto linha = [&o](const wxString &nome, double valor, double preco) {
         wxString n = nome;
@@ -683,12 +805,7 @@ void EstoquePrecosPanel::recalcular()
         v.Pad(std::max<int>(0, 14 - int(v.length())), ' ', false);
         o += n + v + ep_u8("   ") + (preco > 0.0 ? ep_pct(valor / preco) : wxString()) + "\n";
     };
-    if (!avisos.empty()) {
-        o += ep_u8("ATENÇÃO\n");
-        for (const wxString &a : avisos) o += ep_u8(" • ") + a + "\n";
-        o += "\n";
-    }
-    o += ep_u8("COMPOSIÇÃO DO PREÇO (por unidade)\n");
+    o += ep_u8("COMPOSIÇÃO DO PREÇO (por peça)\n");
     o += ep_u8("────────────────────────────────────────────────────────────\n");
     linha(ep_u8("Material (filamento + desperdício)"), r.material, r.preco);
     linha(ep_u8("Energia elétrica"), r.energia, r.preco);
@@ -697,11 +814,11 @@ void EstoquePrecosPanel::recalcular()
     linha(ep_u8("Reserva para falhas"), r.falhas, r.preco);
     linha(ep_u8("Custos fixos rateados"), r.fixos, r.preco);
     linha(ep_u8("Mão de obra"), r.mao_de_obra, r.preco);
-    linha(ep_u8("Insumos (tinta, componentes...)"), r.insumos, r.preco);
+    linha(ep_u8("Insumos"), r.insumos, r.preco);
     linha(ep_u8("Embalagem avulsa"), r.embalagem, r.preco);
-    linha(ep_u8("Arquivo/modelo + outros"), r.arquivo + r.outros, r.preco);
-    linha(ep_u8("= CUSTO DE PRODUÇÃO"), r.custo_producao, r.preco);
-    linha(ep_u8("Frete pago pelo vendedor"), r.frete, r.preco);
+    linha(ep_u8("Arquivo 3D + outros"), r.arquivo + r.outros, r.preco);
+    linha(ep_u8("= CUSTO PARA PRODUZIR"), r.custo_producao, r.preco);
+    linha(ep_u8("Frete pago por você"), r.frete, r.preco);
     linha(ep_u8("Taxa fixa do canal"), r.taxa_fixa, r.preco);
     linha(ep_u8("Impostos"), r.impostos, r.preco);
     linha(ep_u8("Comissão do canal"), r.comissao, r.preco);
@@ -709,15 +826,13 @@ void EstoquePrecosPanel::recalcular()
     linha(ep_u8("Publicidade"), r.publicidade, r.preco);
     linha(ep_u8("Devoluções e garantia"), r.devolucoes, r.preco);
     linha(ep_u8("Cupons e descontos"), r.cupons, r.preco);
-    linha(ep_u8("LUCRO LÍQUIDO"), r.lucro, r.preco);
+    linha(ep_u8("LUCRO"), r.lucro, r.preco);
     o += ep_u8("────────────────────────────────────────────────────────────\n");
     linha(ep_u8("PREÇO DE VENDA"), r.preco, r.preco);
-    o += ep_u8("Margem real: ") + ep_pct(r.margem_real) + ep_u8("   ·   Margem pedida: ") + ep_pct(r.margem) + "\n";
-    o += ep_u8("Hora de trabalho: ") + ep_reais(cfg.custo_hora_trabalho()) + ep_u8("/h   ·   Máquina: ") +
-         ep_reais(imp.custo_maquina_por_h(cfg.tarifa_kwh)) + ep_u8("/h   ·   Fixos: ") + ep_reais(cfg.custo_fixo_por_hora_impressao()) + ep_u8("/h\n\n");
-
-    o += ep_u8("MESMO PRODUTO EM CADA CANAL\n");
-    o += ep_u8("Canal                                        Preço        Lucro   Margem\n");
+    o += ep_u8("Hora de trabalho: ") + ep_reais(cfg.custo_hora_trabalho()) + ep_u8("/h  ·  Máquina: ") +
+         ep_reais(imp.custo_maquina_por_h(cfg.tarifa_kwh)) + ep_u8("/h  ·  Fixos: ") + ep_reais(cfg.custo_fixo_por_hora_impressao()) + ep_u8("/h\n\n");
+    o += ep_u8("MESMA PEÇA EM CADA CANAL\n");
+    o += ep_u8("Canal                                        Preço        Lucro\n");
     for (size_t k = 0; k < m_dados.canais.size(); ++k) {
         const Resultado rk = calcular(t, imp, m_dados.canais[k], cfg);
         wxString nome = ep_u8(m_dados.canais[k].nome);
@@ -726,11 +841,10 @@ void EstoquePrecosPanel::recalcular()
         wxString pr = ep_reais(rk.preco), lu = ep_reais(rk.lucro);
         pr.Pad(std::max<int>(0, 12 - int(pr.length())), ' ', false);
         lu.Pad(std::max<int>(0, 12 - int(lu.length())), ' ', false);
-        o += (int(k) == ic ? ep_u8("► ") : ep_u8("  ")) + nome + pr + ep_u8(" ") + lu + ep_u8("   ") + ep_pct(rk.margem_real) + "\n";
+        o += (int(k) == ic ? ep_u8("► ") : ep_u8("  ")) + nome + pr + ep_u8(" ") + lu + "\n";
     }
-    m_txt_resultado->ChangeValue(o);
-    m_pag_preco->Layout();
-    m_pag_preco->FitInside();
+    m_txt_detalhes->ChangeValue(o);
+    relayout();
 }
 
 void EstoquePrecosPanel::confirmar_producao()
@@ -749,28 +863,28 @@ void EstoquePrecosPanel::confirmar_producao()
         rolos.push_back({r->id, s.gramas});
         resumo += ep_u8(" • ") + ep_u8(r->nome) + ep_u8(": −") + ep_fmt(s.gramas * placas, 1) + ep_u8(" g (fica ") + ep_fmt(r->saldo_g - s.gramas * placas, 0) + ep_u8(" g)\n");
     }
-    for (const ItemInsumo &it : m_insumos_produto) {
-        const Insumo *ins = m_dados.insumo(it.insumo_id);
-        if (ins == nullptr || it.qtd_por_unidade <= 0.0) continue;
-        insumos.push_back({ins->id, it.qtd_por_unidade});
-        const double q = it.qtd_por_unidade * placas * unid;
+    for (const LinhaInsumo &l : m_insumos_produto) {
+        const Insumo *ins = m_dados.insumo(l.insumo_id);
+        if (ins == nullptr || l.qtd <= 0.0) continue;
+        insumos.push_back({ins->id, l.qtd});
+        const double q = l.qtd * placas * unid;
         resumo += ep_u8(" • ") + ep_u8(ins->nome) + ep_u8(": −") + ep_fmt(q, 2) + ep_u8(" ") + ep_u8(ins->unidade) + ep_u8(" (fica ") + ep_fmt(ins->saldo - q, 2) + ep_u8(")\n");
     }
     if (rolos.empty() && insumos.empty()) {
-        wxMessageBox(ep_u8("Nada para descontar. Escolha o rolo de cada filamento (e os insumos, se houver)."), ep_u8("Estoque e Preços"),
+        wxMessageBox(ep_u8("Nada para descontar. Escolha o rolo de cada filamento (e os insumos, se houver)."), ep_titulo(),
                      wxOK | wxICON_INFORMATION, this);
         return;
     }
     wxString produto = m_txt_produto->GetValue();
     if (produto.empty()) produto = ep_u8("(sem nome)");
     const wxString msg = ep_u8("Confirmar a produção de ") + wxString::Format("%d", placas) + ep_u8(" placa(s) = ") +
-                         wxString::Format("%d", placas * unid) + ep_u8(" unidade(s) de \"") + produto + ep_u8("\"?\n\n") + resumo;
+                         wxString::Format("%d", placas * unid) + ep_u8(" peça(s) de \"") + produto + ep_u8("\"?\n\n") + resumo;
     if (wxMessageBox(msg, ep_u8("Confirmar produção"), wxYES_NO | wxICON_QUESTION, this) != wxYES)
         return;
 
     std::vector<std::string> avisos = m_dados.confirmar_producao(ep_std8(produto), placas, unid, rolos, insumos, m_ultimo_preco, ep_agora());
     salvar();
-    for (TabelaEstoque *t : {m_tab_rolos, m_tab_insumos, m_tab_historico}) t->recarregar();
+    estoque_alterado();
     atualizar_escolhas();
     recalcular();
 
@@ -779,7 +893,7 @@ void EstoquePrecosPanel::confirmar_producao()
         fim += ep_u8("\n\n");
         for (const std::string &a : avisos) fim += ep_u8("• ") + ep_u8(a) + "\n";
     }
-    wxMessageBox(fim, ep_u8("Estoque e Preços"), wxOK | (avisos.empty() ? wxICON_INFORMATION : wxICON_WARNING), this);
+    wxMessageBox(fim, ep_titulo(), wxOK | (avisos.empty() ? wxICON_INFORMATION : wxICON_WARNING), this);
 }
 
 // ---------------------------------------------------------------- tabelas
@@ -790,30 +904,51 @@ TabelaEstoque *EstoquePrecosPanel::criar_tabela_rolos(wxNotebook *nb)
 {
     std::vector<TabelaEstoque::Coluna> c;
     auto R = [this](int i) -> Rolo & { return m_dados.rolos[i]; };
-    c.push_back({ep_u8("Nome do rolo"), Tipo::Texto, 300, [=](int i) { return ep_u8(R(i).nome); }, [=](int i, const wxString &v) { R(i).nome = ep_std8(v); }});
-    c.push_back({ep_u8("Material"), Tipo::Texto, 80, [=](int i) { return ep_u8(R(i).material); }, [=](int i, const wxString &v) { R(i).material = ep_std8(v); }});
-    c.push_back({ep_u8("Marca"), Tipo::Texto, 100, [=](int i) { return ep_u8(R(i).marca); }, [=](int i, const wxString &v) { R(i).marca = ep_std8(v); }});
-    c.push_back({ep_u8("Cor"), Tipo::Texto, 80, [=](int i) { return ep_u8(R(i).cor); }, [=](int i, const wxString &v) { R(i).cor = ep_std8(v); }});
-    c.push_back({ep_u8("Preço pago (R$)"), Tipo::Numero, 95, [=](int i) { return ep_fmt(R(i).preco_pago); }, [=](int i, const wxString &v) { R(i).preco_pago = ep_num(v); }});
-    c.push_back({ep_u8("Peso do rolo (g)"), Tipo::Numero, 95, [=](int i) { return ep_fmt(R(i).peso_g, 0); }, [=](int i, const wxString &v) { R(i).peso_g = ep_num(v, 1000.0); }});
-    c.push_back({ep_u8("Saldo (g)"), Tipo::Numero, 85, [=](int i) { return ep_fmt(R(i).saldo_g, 1); }, [=](int i, const wxString &v) { R(i).saldo_g = ep_num(v); }});
-    c.push_back({ep_u8("Alerta abaixo de (g)"), Tipo::Numero, 110, [=](int i) { return ep_fmt(R(i).minimo_g, 0); }, [=](int i, const wxString &v) { R(i).minimo_g = ep_num(v); }});
+    c.push_back({ep_u8("Filamento"), Tipo::Texto, 320, [=](int i) { return ep_u8(R(i).nome); }, [=](int i, const wxString &v) { R(i).nome = ep_std8(v); }});
+    c.push_back({ep_u8("Material"), Tipo::Texto, 90, [=](int i) { return ep_u8(R(i).material); }, [=](int i, const wxString &v) { R(i).material = ep_std8(v); }});
+    c.push_back({ep_u8("Cor"), Tipo::Texto, 90, [=](int i) { return ep_u8(R(i).cor); }, [=](int i, const wxString &v) { R(i).cor = ep_std8(v); }});
+    c.push_back({ep_u8("Quanto tem (g)"), Tipo::Numero, 105, [=](int i) { return ep_fmt(R(i).saldo_g, 0); }, [=](int i, const wxString &v) { R(i).saldo_g = ep_num(v); }});
+    c.push_back({ep_u8("Preço do rolo (R$)"), Tipo::Numero, 110, [=](int i) { return ep_fmt(R(i).preco_pago); }, [=](int i, const wxString &v) { R(i).preco_pago = ep_num(v); }});
+    c.push_back({ep_u8("Peso do rolo (g)"), Tipo::Numero, 100, [=](int i) { return ep_fmt(R(i).peso_g, 0); }, [=](int i, const wxString &v) { R(i).peso_g = ep_num(v, 1000.0); }});
+    c.push_back({ep_u8("Avisar abaixo de (g)"), Tipo::Numero, 120, [=](int i) { return ep_fmt(R(i).minimo_g, 0); }, [=](int i, const wxString &v) { R(i).minimo_g = ep_num(v); }});
     c.push_back({ep_u8("R$/g"), Tipo::Calculado, 70, [=](int i) { return ep_fmt(R(i).custo_por_grama(), 4); }, nullptr});
-    c.push_back({ep_u8("Valor em estoque"), Tipo::Calculado, 105, [=](int i) { return ep_reais(std::max(0.0, R(i).saldo_g) * R(i).custo_por_grama()); }, nullptr});
+
+    std::vector<TabelaEstoque::Acao> acoes;
+    acoes.push_back({ep_u8("Registrar compra"), [this](int i) {
+        Rolo &r = m_dados.rolos[i];
+        const wxString qtd = wxGetTextFromUser(ep_u8("Quantos rolos novos de \"") + ep_u8(r.nome) + ep_u8("\" você comprou?"),
+                                               ep_u8("Registrar compra"), "1", this);
+        bool ok = false;
+        const double n = ep_num(qtd, 0.0, &ok);
+        if (!ok || n <= 0.0) return;
+        const wxString preco = wxGetTextFromUser(ep_u8("Quanto pagou em cada rolo (R$)?"), ep_u8("Registrar compra"), ep_fmt(r.preco_pago), this);
+        const double pr = ep_num(preco, 0.0);
+        m_dados.registrar_compra_rolo(r.id, n, pr, ep_agora());
+    }});
+    acoes.push_back({ep_u8("Ajustar quanto tem"), [this](int i) {
+        Rolo &r = m_dados.rolos[i];
+        const wxString v = wxGetTextFromUser(ep_u8("Quantos gramas de \"") + ep_u8(r.nome) + ep_u8("\" você tem agora?\n(Dica: pese o rolo e desconte o carretel vazio, ~200–250 g.)"),
+                                             ep_u8("Ajustar quanto tem"), ep_fmt(r.saldo_g, 0), this);
+        bool ok = false;
+        const double g = ep_num(v, 0.0, &ok);
+        if (!ok) return;
+        m_dados.ajustar_saldo_rolo(r.id, g, ep_agora());
+    }});
 
     auto *t = new TabelaEstoque(nb,
-        ep_u8("Cadastre cada rolo que você compra. O custo por grama é calculado sozinho. O saldo diminui quando você confirma uma produção; "
-           "edite o saldo para ajustes (ex.: pesou o rolo). Linhas em vermelho estão com saldo abaixo do alerta."),
+        ep_u8("Seus rolos de filamento. Em \"Quanto tem\", informe quantos gramas ainda restam. Ao confirmar uma produção, o que foi usado sai daqui sozinho. "
+              "Comprou mais? Clique na linha e em \"Registrar compra\". Vermelho = acabando."),
         std::move(c), [this]() { return int(m_dados.rolos.size()); },
         [this]() {
             Rolo r;
             r.id = m_dados.novo_id("r");
-            r.nome = "Novo rolo";
+            r.nome = "Novo filamento";
             r.saldo_g = 1000.0;
+            r.minimo_g = 100.0;
             m_dados.rolos.push_back(r);
         },
         [this](int i) { m_dados.rolos.erase(m_dados.rolos.begin() + i); },
-        [this]() { dados_alterados(); });
+        [this]() { dados_alterados(); estoque_alterado(); }, false, ep_u8("+ Novo filamento"), std::move(acoes));
     t->set_destaque([this](int i) {
         const Rolo &r = m_dados.rolos[i];
         return r.saldo_g < 0.0 || (r.minimo_g > 0.0 && r.saldo_g < r.minimo_g);
@@ -825,18 +960,39 @@ TabelaEstoque *EstoquePrecosPanel::criar_tabela_insumos(wxNotebook *nb)
 {
     std::vector<TabelaEstoque::Coluna> c;
     auto I = [this](int i) -> Insumo & { return m_dados.insumos[i]; };
-    c.push_back({ep_u8("Nome do insumo"), Tipo::Texto, 320, [=](int i) { return ep_u8(I(i).nome); }, [=](int i, const wxString &v) { I(i).nome = ep_std8(v); }});
-    c.push_back({ep_u8("Categoria"), Tipo::Texto, 100, [=](int i) { return ep_u8(I(i).categoria); }, [=](int i, const wxString &v) { I(i).categoria = ep_std8(v); }});
-    c.push_back({ep_u8("Preço pago (R$)"), Tipo::Numero, 95, [=](int i) { return ep_fmt(I(i).preco_pago); }, [=](int i, const wxString &v) { I(i).preco_pago = ep_num(v); }});
-    c.push_back({ep_u8("Quantidade que vem"), Tipo::Numero, 110, [=](int i) { return ep_fmt(I(i).quantidade, 2); }, [=](int i, const wxString &v) { I(i).quantidade = ep_num(v, 1.0); }});
-    c.push_back({ep_u8("Unidade"), Tipo::Texto, 60, [=](int i) { return ep_u8(I(i).unidade); }, [=](int i, const wxString &v) { I(i).unidade = ep_std8(v); }});
-    c.push_back({ep_u8("Saldo"), Tipo::Numero, 80, [=](int i) { return ep_fmt(I(i).saldo, 2); }, [=](int i, const wxString &v) { I(i).saldo = ep_num(v); }});
-    c.push_back({ep_u8("Alerta abaixo de"), Tipo::Numero, 100, [=](int i) { return ep_fmt(I(i).minimo, 2); }, [=](int i, const wxString &v) { I(i).minimo = ep_num(v); }});
-    c.push_back({ep_u8("Custo por unidade"), Tipo::Calculado, 105, [=](int i) { return ep_reais(I(i).custo_unidade()); }, nullptr});
+    c.push_back({ep_u8("Insumo"), Tipo::Texto, 320, [=](int i) { return ep_u8(I(i).nome); }, [=](int i, const wxString &v) { I(i).nome = ep_std8(v); }});
+    c.push_back({ep_u8("Unidade (un, ml, g)"), Tipo::Texto, 110, [=](int i) { return ep_u8(I(i).unidade); }, [=](int i, const wxString &v) { I(i).unidade = ep_std8(v); }});
+    c.push_back({ep_u8("Quanto tem"), Tipo::Numero, 90, [=](int i) { return ep_fmt(I(i).saldo, 1); }, [=](int i, const wxString &v) { I(i).saldo = ep_num(v); }});
+    c.push_back({ep_u8("Preço do pacote (R$)"), Tipo::Numero, 120, [=](int i) { return ep_fmt(I(i).preco_pago); }, [=](int i, const wxString &v) { I(i).preco_pago = ep_num(v); }});
+    c.push_back({ep_u8("Vem no pacote"), Tipo::Numero, 95, [=](int i) { return ep_fmt(I(i).quantidade, 1); }, [=](int i, const wxString &v) { I(i).quantidade = ep_num(v, 1.0); }});
+    c.push_back({ep_u8("Avisar abaixo de"), Tipo::Numero, 105, [=](int i) { return ep_fmt(I(i).minimo, 1); }, [=](int i, const wxString &v) { I(i).minimo = ep_num(v); }});
+    c.push_back({ep_u8("Custo por unidade"), Tipo::Calculado, 110, [=](int i) { return ep_reais(I(i).custo_unidade()); }, nullptr});
+
+    std::vector<TabelaEstoque::Acao> acoes;
+    acoes.push_back({ep_u8("Registrar compra"), [this](int i) {
+        Insumo &x = m_dados.insumos[i];
+        const wxString qtd = wxGetTextFromUser(ep_u8("Quantos pacotes novos de \"") + ep_u8(x.nome) + ep_u8("\" você comprou?"),
+                                               ep_u8("Registrar compra"), "1", this);
+        bool ok = false;
+        const double n = ep_num(qtd, 0.0, &ok);
+        if (!ok || n <= 0.0) return;
+        const wxString preco = wxGetTextFromUser(ep_u8("Quanto pagou em cada pacote (R$)?"), ep_u8("Registrar compra"), ep_fmt(x.preco_pago), this);
+        m_dados.registrar_compra_insumo(x.id, n, ep_num(preco, 0.0), ep_agora());
+    }});
+    acoes.push_back({ep_u8("Ajustar quanto tem"), [this](int i) {
+        Insumo &x = m_dados.insumos[i];
+        const wxString v = wxGetTextFromUser(ep_u8("Quanto de \"") + ep_u8(x.nome) + ep_u8("\" você tem agora? (em ") +
+                                                 ep_u8(x.unidade.empty() ? "un" : x.unidade) + ep_u8(")"),
+                                             ep_u8("Ajustar quanto tem"), ep_fmt(x.saldo, 1), this);
+        bool ok = false;
+        const double q = ep_num(v, 0.0, &ok);
+        if (!ok) return;
+        m_dados.ajustar_saldo_insumo(x.id, q, ep_agora());
+    }});
 
     auto *t = new TabelaEstoque(nb,
-        ep_u8("Tintas, componentes (argolas, ímãs, NFC...) e embalagens. Informe quanto pagou e quanto vem; o custo por unidade é calculado. "
-           "O saldo diminui ao confirmar uma produção que use o insumo."),
+        ep_u8("Tinta, cola, argolas, ímãs, embalagens... Informe quanto vem no pacote e quanto você ainda tem (ex.: cola em ml). "
+              "Ferramentas (alicate, kit de acabamento) não entram aqui: elas já estão nos custos fixos do negócio."),
         std::move(c), [this]() { return int(m_dados.insumos.size()); },
         [this]() {
             Insumo i;
@@ -845,7 +1001,7 @@ TabelaEstoque *EstoquePrecosPanel::criar_tabela_insumos(wxNotebook *nb)
             m_dados.insumos.push_back(i);
         },
         [this](int i) { m_dados.insumos.erase(m_dados.insumos.begin() + i); },
-        [this]() { dados_alterados(); });
+        [this]() { dados_alterados(); estoque_alterado(); }, false, ep_u8("+ Novo insumo"), std::move(acoes));
     t->set_destaque([this](int i) {
         const Insumo &x = m_dados.insumos[i];
         return x.saldo < 0.0 || (x.minimo > 0.0 && x.saldo < x.minimo);
@@ -857,20 +1013,18 @@ TabelaEstoque *EstoquePrecosPanel::criar_tabela_impressoras(wxNotebook *nb)
 {
     std::vector<TabelaEstoque::Coluna> c;
     auto P = [this](int i) -> Impressora & { return m_dados.impressoras[i]; };
-    c.push_back({ep_u8("Nome"), Tipo::Texto, 200, [=](int i) { return ep_u8(P(i).nome); }, [=](int i, const wxString &v) { P(i).nome = ep_std8(v); }});
-    c.push_back({ep_u8("Perfil no Bambu contém"), Tipo::Texto, 140, [=](int i) { return ep_u8(P(i).perfil_bambu); }, [=](int i, const wxString &v) { P(i).perfil_bambu = ep_std8(v); }});
-    c.push_back({ep_u8("Preço de compra (R$)"), Tipo::Numero, 120, [=](int i) { return ep_fmt(P(i).preco_compra); }, [=](int i, const wxString &v) { P(i).preco_compra = ep_num(v); }});
-    c.push_back({ep_u8("Valor residual (%)"), Tipo::Percentual, 105, [=](int i) { return ep_fmt(P(i).valor_residual * 100.0, 1); }, [=](int i, const wxString &v) { P(i).valor_residual = ep_num(v) / 100.0; }});
+    c.push_back({ep_u8("Nome"), Tipo::Texto, 220, [=](int i) { return ep_u8(P(i).nome); }, [=](int i, const wxString &v) { P(i).nome = ep_std8(v); }});
+    c.push_back({ep_u8("Modelo no Bambu (ex.: A1, P1S)"), Tipo::Texto, 170, [=](int i) { return ep_u8(P(i).perfil_bambu); }, [=](int i, const wxString &v) { P(i).perfil_bambu = ep_std8(v); }});
+    c.push_back({ep_u8("Preço pago (R$)"), Tipo::Numero, 105, [=](int i) { return ep_fmt(P(i).preco_compra); }, [=](int i, const wxString &v) { P(i).preco_compra = ep_num(v); }});
+    c.push_back({ep_u8("Revenda depois (%)"), Tipo::Percentual, 110, [=](int i) { return ep_fmt(P(i).valor_residual * 100.0, 1); }, [=](int i, const wxString &v) { P(i).valor_residual = ep_num(v) / 100.0; }});
     c.push_back({ep_u8("Vida útil (h)"), Tipo::Numero, 85, [=](int i) { return ep_fmt(P(i).vida_util_h, 0); }, [=](int i, const wxString &v) { P(i).vida_util_h = ep_num(v); }});
-    c.push_back({ep_u8("Potência média (W)"), Tipo::Numero, 105, [=](int i) { return ep_fmt(P(i).potencia_w, 0); }, [=](int i, const wxString &v) { P(i).potencia_w = ep_num(v); }});
-    c.push_back({ep_u8("Manutenção (R$/h)"), Tipo::Numero, 105, [=](int i) { return ep_fmt(P(i).manutencao_por_h, 2); }, [=](int i, const wxString &v) { P(i).manutencao_por_h = ep_num(v); }});
-    c.push_back({ep_u8("Depreciação (R$/h)"), Tipo::Calculado, 105, [=](int i) { return ep_fmt(P(i).depreciacao_por_h(), 4); }, nullptr});
-    c.push_back({ep_u8("Energia (R$/h)"), Tipo::Calculado, 90, [=](int i) { return ep_fmt(P(i).energia_por_h(m_dados.config.tarifa_kwh), 4); }, nullptr});
-    c.push_back({ep_u8("Custo máquina (R$/h)"), Tipo::Calculado, 120, [=](int i) { return ep_fmt(P(i).custo_maquina_por_h(m_dados.config.tarifa_kwh), 4); }, nullptr});
+    c.push_back({ep_u8("Potência (W)"), Tipo::Numero, 85, [=](int i) { return ep_fmt(P(i).potencia_w, 0); }, [=](int i, const wxString &v) { P(i).potencia_w = ep_num(v); }});
+    c.push_back({ep_u8("Manutenção (R$/h)"), Tipo::Numero, 110, [=](int i) { return ep_fmt(P(i).manutencao_por_h, 2); }, [=](int i, const wxString &v) { P(i).manutencao_por_h = ep_num(v); }});
+    c.push_back({ep_u8("Custo da máquina (R$/h)"), Tipo::Calculado, 140, [=](int i) { return ep_fmt(P(i).custo_maquina_por_h(m_dados.config.tarifa_kwh), 4); }, nullptr});
 
     return new TabelaEstoque(nb,
-        ep_u8("Em \"Perfil no Bambu contém\", escreva um trecho do nome da impressora no Bambu Studio (ex.: A1, A1 mini, P1S, X1). "
-           "Ao ler a placa fatiada, a impressora certa é escolhida sozinha."),
+        ep_u8("Em \"Modelo no Bambu\", escreva como a impressora aparece no Bambu Studio (A1, A1 mini, P1S, X1...). "
+              "Assim a impressora certa é escolhida sozinha ao ler a placa."),
         std::move(c), [this]() { return int(m_dados.impressoras.size()); },
         [this]() {
             Impressora i;
@@ -878,7 +1032,7 @@ TabelaEstoque *EstoquePrecosPanel::criar_tabela_impressoras(wxNotebook *nb)
             m_dados.impressoras.push_back(i);
         },
         [this](int i) { m_dados.impressoras.erase(m_dados.impressoras.begin() + i); },
-        [this]() { dados_alterados(); });
+        [this]() { dados_alterados(); }, false, ep_u8("+ Nova impressora"));
 }
 
 TabelaEstoque *EstoquePrecosPanel::criar_tabela_canais(wxNotebook *nb)
@@ -886,13 +1040,12 @@ TabelaEstoque *EstoquePrecosPanel::criar_tabela_canais(wxNotebook *nb)
     std::vector<TabelaEstoque::Coluna> c;
     auto C = [this](int i) -> Canal & { return m_dados.canais[i]; };
     c.push_back({ep_u8("Canal"), Tipo::Texto, 320, [=](int i) { return ep_u8(C(i).nome); }, [=](int i, const wxString &v) { C(i).nome = ep_std8(v); }});
-    c.push_back({ep_u8("Comissão (% do preço)"), Tipo::Percentual, 130, [=](int i) { return ep_fmt(C(i).comissao * 100.0, 1); }, [=](int i, const wxString &v) { C(i).comissao = ep_num(v) / 100.0; }});
-    c.push_back({ep_u8("Taxa fixa por item (R$)"), Tipo::Numero, 130, [=](int i) { return ep_fmt(C(i).taxa_fixa); }, [=](int i, const wxString &v) { C(i).taxa_fixa = ep_num(v); }});
-    c.push_back({ep_u8("Taxa de pagamento (%)"), Tipo::Percentual, 130, [=](int i) { return ep_fmt(C(i).taxa_pagamento * 100.0, 1); }, [=](int i, const wxString &v) { C(i).taxa_pagamento = ep_num(v) / 100.0; }});
+    c.push_back({ep_u8("Comissão (%)"), Tipo::Percentual, 100, [=](int i) { return ep_fmt(C(i).comissao * 100.0, 1); }, [=](int i, const wxString &v) { C(i).comissao = ep_num(v) / 100.0; }});
+    c.push_back({ep_u8("Taxa fixa por item (R$)"), Tipo::Numero, 140, [=](int i) { return ep_fmt(C(i).taxa_fixa); }, [=](int i, const wxString &v) { C(i).taxa_fixa = ep_num(v); }});
+    c.push_back({ep_u8("Taxa de pagamento (%)"), Tipo::Percentual, 140, [=](int i) { return ep_fmt(C(i).taxa_pagamento * 100.0, 1); }, [=](int i, const wxString &v) { C(i).taxa_pagamento = ep_num(v) / 100.0; }});
 
     return new TabelaEstoque(nb,
-        ep_u8("Comissões e taxas mudam com frequência e variam por categoria e faixa de preço. Os valores iniciais são estimativas da planilha — "
-           "confira sempre na central do vendedor."),
+        ep_u8("Comissões e taxas mudam com frequência. Os valores iniciais são estimativas — confira sempre na central do vendedor."),
         std::move(c), [this]() { return int(m_dados.canais.size()); },
         [this]() {
             Canal k;
@@ -900,7 +1053,7 @@ TabelaEstoque *EstoquePrecosPanel::criar_tabela_canais(wxNotebook *nb)
             m_dados.canais.push_back(k);
         },
         [this](int i) { m_dados.canais.erase(m_dados.canais.begin() + i); },
-        [this]() { dados_alterados(); });
+        [this]() { dados_alterados(); }, false, ep_u8("+ Novo canal"));
 }
 
 TabelaEstoque *EstoquePrecosPanel::criar_tabela_historico(wxNotebook *nb)
@@ -910,12 +1063,12 @@ TabelaEstoque *EstoquePrecosPanel::criar_tabela_historico(wxNotebook *nb)
     auto H = [this](int i) -> const Movimento & { return m_dados.historico[m_dados.historico.size() - 1 - size_t(i)]; };
     c.push_back({ep_u8("Data"), Tipo::Texto, 120, [=](int i) { return ep_u8(H(i).data); }, nullptr});
     c.push_back({ep_u8("Tipo"), Tipo::Texto, 80, [=](int i) { return ep_u8(H(i).tipo); }, nullptr});
-    c.push_back({ep_u8("Produto / motivo"), Tipo::Texto, 260, [=](int i) { return ep_u8(H(i).descricao); }, nullptr});
+    c.push_back({ep_u8("Peça / motivo"), Tipo::Texto, 260, [=](int i) { return ep_u8(H(i).descricao); }, nullptr});
     c.push_back({ep_u8("Item"), Tipo::Texto, 260, [=](int i) { return ep_u8(H(i).item); }, nullptr});
     c.push_back({ep_u8("Quantidade"), Tipo::Numero, 90, [=](int i) { return ep_fmt(H(i).quantidade, 2); }, nullptr});
     c.push_back({ep_u8("Unidade"), Tipo::Texto, 60, [=](int i) { return ep_u8(H(i).unidade); }, nullptr});
-    c.push_back({ep_u8("Preço unit. (R$)"), Tipo::Numero, 100, [=](int i) { return ep_fmt(H(i).valor); }, nullptr});
-    return new TabelaEstoque(nb, ep_u8("Cada produção confirmada registra aqui o que saiu do estoque."), std::move(c),
+    c.push_back({ep_u8("Preço (R$)"), Tipo::Numero, 90, [=](int i) { return ep_fmt(H(i).valor); }, nullptr});
+    return new TabelaEstoque(nb, ep_u8("Tudo que entrou e saiu do estoque: produções, compras e ajustes."), std::move(c),
                              [this]() { return int(m_dados.historico.size()); }, nullptr, nullptr, nullptr, true);
 }
 

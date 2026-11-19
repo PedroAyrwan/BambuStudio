@@ -95,6 +95,13 @@ struct Dados
                                                 double preco_unitario,
                                                 const std::string &data_hora);
 
+    // Compra: soma 'quantidade' rolos/pacotes ao saldo. Se preco > 0, atualiza o preco pago.
+    bool registrar_compra_rolo(const std::string &id, double rolos, double preco_por_rolo, const std::string &data_hora);
+    bool registrar_compra_insumo(const std::string &id, double pacotes, double preco_por_pacote, const std::string &data_hora);
+    // Ajuste: o usuario informa quanto tem agora (pesou o rolo, viu quanto de cola sobrou...).
+    bool ajustar_saldo_rolo(const std::string &id, double saldo_g, const std::string &data_hora);
+    bool ajustar_saldo_insumo(const std::string &id, double saldo, const std::string &data_hora);
+
     std::string to_json() const;
     // Retorna false e preenche erro se o texto nao for um JSON valido.
     bool from_json(const std::string &texto, std::string &erro);

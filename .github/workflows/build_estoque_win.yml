@@ -32,90 +32,11 @@ jobs:
             src/slic3r/GUI/EstoquePrecos/EstoquePrecosCore.cpp
           ./test_store
 
-  # Build com Ninja + sccache: os objetos compilados ficam em cache entre rodadas,
-  # entao uma mudanca pequena so recompila os arquivos afetados.
-  # PCH desligado porque o sccache nao consegue cachear compilacoes MSVC com /Yu.
   build_win:
-    name: Build Windows x64 (Ninja + sccache)
+    name: Build Windows x64
     needs: [testes]
-    runs-on: windows-latest
-    env:
-      SCCACHE_DIR: ${{ github.workspace }}\sccache
-      SCCACHE_CACHE_SIZE: 6G
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          lfs: 'true'
-
-      # Mesmo cache das dependencias gerado pelo build_check_cache/build_deps (mesma chave e caminho).
-      - name: Dependencias (cache)
-        uses: actions/cache/restore@v5
-        with:
-          path: ${{ github.workspace }}/deps/build/BambuStudio_dep
-          key: windows-latest-cache-bambustudio_deps-build-${{ hashFiles('deps/**') }}
-          fail-on-cache-miss: true
-
-      - name: Objetos compilados (sccache)
-        uses: actions/cache/restore@v5
-        with:
-          path: ${{ github.workspace }}\sccache
-          key: sccache-win-x64-${{ github.run_id }}
-          restore-keys: |
-            sccache-win-x64-
-
-      - name: Instalar sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
-      - name: MSVC no PATH
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-
-      - name: Ferramentas
-        run: |
-          choco install pkgconfiglite -y
-          choco install ninja -y
-
-      - name: Configurar
-        shell: cmd
-        run: |
-          mkdir build
-          cd build
-          rem NOMINMAX: sem PCH, a macro max/min do windows.h quebra codigo do proprio Bambu (ex.: Emboss.cpp).
-          cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release -DSLIC3R_PCH=OFF -DSLIC3R_PCH_FORCE_INCLUDE=ON ^
-            -DCMAKE_CXX_FLAGS_INIT=/DNOMINMAX -DCMAKE_C_FLAGS_INIT=/DNOMINMAX ^
-            -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache ^
-            -DBBL_RELEASE_TO_PUBLIC=1 -DBBL_INTERNAL_TESTING=0 ^
-            -DCMAKE_PREFIX_PATH="${{ github.workspace }}\deps\build\BambuStudio_dep\usr\local" ^
-            -DCMAKE_INSTALL_PREFIX="../install-dir" ^
-            -DWIN10SDK_PATH="C:/Program Files (x86)/Windows Kits/10/Include/10.0.22000.0"
-
-      - name: Compilar
-        shell: cmd
-        run: |
-          sccache --zero-stats
-          cd build
-          cmake --build . --target install --config Release
-
-      - name: Estatisticas do cache
-        if: always()
-        run: sccache --show-stats
-
-      # Salva o cache mesmo se a compilacao falhar: a proxima tentativa reaproveita o que ja compilou.
-      - name: Salvar objetos compilados
-        if: always()
-        uses: actions/cache/save@v5
-        with:
-          path: ${{ github.workspace }}\sccache
-          key: sccache-win-x64-${{ github.run_id }}
-
-      - name: Empacotar
-        shell: cmd
-        run: '"C:/Program Files/7-Zip/7z.exe" a -tzip BambuStudio_Windows_estoque_portable.zip ${{ github.workspace }}/install-dir'
-
-      - name: Enviar artefato
-        uses: actions/upload-artifact@v6
-        with:
-          name: BambuStudio_Windows_estoque_portable
-          path: ${{ github.workspace }}/BambuStudio_Windows_estoque_portable.zip
+    uses: ./.github/workflows/build_check_cache.yml
+    with:
+      os: windows-latest
+      build-deps-only: false
+    secrets: inherit

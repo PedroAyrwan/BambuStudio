@@ -39,10 +39,26 @@ int main()
     CONFERE(d.rolos[0].saldo_g < 0.0);
     CONFERE(avisos.size() == 1); // saldo negativo
 
+    // Compra de 2 rolos com preco novo; ajuste manual depois de pesar o rolo.
+    CONFERE(d.registrar_compra_rolo("r1", 2, 99.9, "2026-11-18 10:00"));
+    CONFERE(std::fabs(d.rolos[0].saldo_g - (-10.0 + 2000.0)) < 1e-9);
+    CONFERE(std::fabs(d.rolos[0].preco_pago - 99.9) < 1e-12);
+    CONFERE(d.ajustar_saldo_rolo("r1", 1500.0, "2026-11-18 11:00"));
+    CONFERE(std::fabs(d.rolos[0].saldo_g - 1500.0) < 1e-9);
+    CONFERE(std::fabs(d.historico.back().quantidade - (1500.0 - 1990.0)) < 1e-9);
+    // Insumo: compra de 1 pacote (100 un) sem mudar o preco; ajuste para 50.
+    CONFERE(d.registrar_compra_insumo("i1", 1, 0.0, "2026-11-18 12:00"));
+    CONFERE(std::fabs(d.insumos[0].saldo - 104.0) < 1e-9);
+    CONFERE(std::fabs(d.insumos[0].preco_pago - 39.9) < 1e-12);
+    CONFERE(d.ajustar_saldo_insumo("i1", 50.0, "2026-11-18 13:00"));
+    CONFERE(std::fabs(d.insumos[0].saldo - 50.0) < 1e-9);
+    CONFERE(!d.registrar_compra_rolo("nao-existe", 1, 0, ""));
+    CONFERE(d.historico.size() == 7);
+
     Dados e;
     std::string erro;
     CONFERE(e.from_json(d.to_json(), erro));
-    CONFERE(e.rolos.size() == 1 && e.insumos.size() == 1 && e.historico.size() == 3);
+    CONFERE(e.rolos.size() == 1 && e.insumos.size() == 1 && e.historico.size() == 7);
     CONFERE(std::fabs(e.rolos[0].saldo_g - d.rolos[0].saldo_g) < 1e-9);
     CONFERE(e.canais.size() == 10 && e.impressoras.size() == 1);
 

@@ -152,6 +152,56 @@ std::vector<std::string> Dados::confirmar_producao(const std::string &produto, i
     return avisos;
 }
 
+static Movimento movimento(const std::string &data, const char *tipo, const std::string &item, double qtd, const std::string &unidade, double valor)
+{
+    Movimento m;
+    m.data = data; m.tipo = tipo; m.item = item; m.quantidade = qtd; m.unidade = unidade; m.valor = valor;
+    m.descricao = std::string(tipo) == "compra" ? "Compra" : "Ajuste de estoque";
+    return m;
+}
+
+bool Dados::registrar_compra_rolo(const std::string &id, double rolos, double preco_por_rolo, const std::string &data_hora)
+{
+    Rolo *r = rolo(id);
+    if (r == nullptr || rolos <= 0.0) return false;
+    if (preco_por_rolo > 0.0) r->preco_pago = preco_por_rolo;
+    const double g = rolos * r->peso_g;
+    r->saldo_g += g;
+    historico.push_back(movimento(data_hora, "compra", r->nome, g, "g", r->preco_pago));
+    return true;
+}
+
+bool Dados::registrar_compra_insumo(const std::string &id, double pacotes, double preco_por_pacote, const std::string &data_hora)
+{
+    Insumo *i = insumo(id);
+    if (i == nullptr || pacotes <= 0.0) return false;
+    if (preco_por_pacote > 0.0) i->preco_pago = preco_por_pacote;
+    const double q = pacotes * i->quantidade;
+    i->saldo += q;
+    historico.push_back(movimento(data_hora, "compra", i->nome, q, i->unidade, i->preco_pago));
+    return true;
+}
+
+bool Dados::ajustar_saldo_rolo(const std::string &id, double saldo_g, const std::string &data_hora)
+{
+    Rolo *r = rolo(id);
+    if (r == nullptr) return false;
+    const double dif = saldo_g - r->saldo_g;
+    r->saldo_g = saldo_g;
+    historico.push_back(movimento(data_hora, "ajuste", r->nome, dif, "g", 0.0));
+    return true;
+}
+
+bool Dados::ajustar_saldo_insumo(const std::string &id, double saldo, const std::string &data_hora)
+{
+    Insumo *i = insumo(id);
+    if (i == nullptr) return false;
+    const double dif = saldo - i->saldo;
+    i->saldo = saldo;
+    historico.push_back(movimento(data_hora, "ajuste", i->nome, dif, i->unidade, 0.0));
+    return true;
+}
+
 // ---------------------------------------------------------------- JSON
 
 static json cfg_to_json(const ConfigNegocio &c)
